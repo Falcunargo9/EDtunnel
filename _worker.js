@@ -1,11 +1,12 @@
+// <!--GAMFC-->version base on commit 43fad05dcdae3b723c53c226f8181fc5bd47223e, time is 2023-06-22 15:20:02 UTC<!--GAMFC-END-->.
 // @ts-ignore
 import { connect } from 'cloudflare:sockets';
 
 // How to generate your own UUID:
 // [Windows] Press "Win + R", input cmd and run:  Powershell -NoExit -Command "[guid]::NewGuid()"
-let userID = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
+let userID = '77a571fb-4fd2-4b37-8596-1b7d9728bb5c';
 
-const proxyIPs = ['23.162.136.169', 'cdn.xn--b6gac.eu.org', 'cdn-all.xn--b6gac.eu.org', 'edgetunnel.anycast.eu.org'];
+const proxyIPs = ["[2a00:1098:2b::1:ac40:6c0a]"];//['cdn.xn--b6gac.eu.org', 'cdn-all.xn--b6gac.eu.org', 'edgetunnel.anycast.eu.org'];
 
 let proxyIP = '47.246.167.52'
 
@@ -38,14 +39,13 @@ export default {
 			if (!upgradeHeader || upgradeHeader !== 'websocket') {
 				const url = new URL(request.url);
 				switch (url.pathname) {
-					case `/cf`: {
+					case '/cf':
 						return new Response(JSON.stringify(request.cf, null, 4), {
 							status: 200,
 							headers: {
 								"Content-Type": "application/json;charset=utf-8",
 							},
 						});
-					}
 					case `/${userID_Path}`: {
 						const vlessConfig = getVLESSConfig(userID, request.headers.get('Host'));
 						return new Response(`${vlessConfig}`, {
@@ -54,46 +54,72 @@ export default {
 								"Content-Type": "text/html; charset=utf-8",
 							}
 						});
-					};
+					}
 					case `/sub/${userID_Path}`: {
 						const url = new URL(request.url);
 						const searchParams = url.searchParams;
-						const vlessSubConfig = createVLESSSub(userID, request.headers.get('Host'));
+						let vlessConfig = createVLESSSub(userID, request.headers.get('Host'));
+						// If 'format' query param equals to 'clash', convert config to base64
+						if (searchParams.get('format') === 'clash') {
+							vlessConfig = btoa(vlessConfig);
+						}
 						// Construct and return response object
-						return new Response(btoa(vlessSubConfig), {
+						return new Response(vlessConfig, {
 							status: 200,
 							headers: {
 								"Content-Type": "text/plain;charset=utf-8",
 							}
 						});
-					};
+					}
+					case `/bestip/${userID_Path}`: {
+						const bestiplink = `https://sub.xf.free.hr/auto?host=${request.headers.get('Host')}&uuid=${userID_Path}`
+						const reqHeaders = new Headers(request.headers);
+						const bestipresponse = await fetch(bestiplink, { redirect: 'manual', headers: reqHeaders, });
+						// Construct and return response object
+						return bestipresponse
+					}
 					default:
 						// return new Response('Not found', { status: 404 });
-						// For any other path, reverse proxy to 'ramdom website' and return the original response, caching it in the process
-						const randomHostname = cn_hostnames[Math.floor(Math.random() * cn_hostnames.length)];
+						// For any other path, reverse proxy to 'www.fmprc.gov.cn' and return the original response, caching it in the process
+						const hostnames = ['www.visa.com', 'www.wto.org'];
+						url.hostname = hostnames[Math.floor(Math.random() * hostnames.length)];
+						url.protocol = 'https:';
+
 						const newHeaders = new Headers(request.headers);
-						newHeaders.set('cf-connecting-ip', '1.2.3.4');
-						newHeaders.set('x-forwarded-for', '1.2.3.4');
-						newHeaders.set('x-real-ip', '1.2.3.4');
-						newHeaders.set('referer', 'https://www.google.com/search?q=edtunnel');
-						// Use fetch to proxy the request to 15 different domains
-						const proxyUrl = 'https://' + randomHostname + url.pathname + url.search;
-						let modifiedRequest = new Request(proxyUrl, {
+						newHeaders.set('cf-connecting-ip', newHeaders.get('x-forwarded-for') || newHeaders.get('cf-connecting-ip'));
+						newHeaders.set('x-forwarded-for', newHeaders.get('cf-connecting-ip'));
+						newHeaders.set('x-real-ip', newHeaders.get('cf-connecting-ip'));
+						newHeaders.set('referer', 'https://www.google.com/q=edtunnel');
+
+						request = new Request(url, {
 							method: request.method,
 							headers: newHeaders,
 							body: request.body,
-							redirect: 'manual',
+							redirect: request.redirect,
 						});
-						const proxyResponse = await fetch(modifiedRequest, { redirect: 'manual' });
-						// Check for 302 or 301 redirect status and return an error response
-						if ([301, 302].includes(proxyResponse.status)) {
-							return new Response(`Redirects to ${randomHostname} are not allowed.`, {
-								status: 403,
-								statusText: 'Forbidden',
-							});
+
+						const cache = caches.default;
+						let response = await cache.match(request);
+
+						if (!response) {
+							try {
+								response = await fetch(request, { redirect: 'manual' });
+							} catch (err) {
+								url.protocol = 'http:';
+								url.hostname = hostnames[Math.floor(Math.random() * hostnames.length)];
+								request = new Request(url, {
+									method: request.method,
+									headers: newHeaders,
+									body: request.body,
+									redirect: request.redirect,
+								});
+								response = await fetch(request, { redirect: 'manual' });
+							}
+
+							const cloneResponse = response.clone();
+							ctx.waitUntil(cache.put(request, cloneResponse));
 						}
-						// Return the response from the proxy server
-						return proxyResponse;
+						return response;
 				}
 			} else {
 				return await vlessOverWSHandler(request);
@@ -687,238 +713,108 @@ async function handleUDPOutBound(webSocket, vlessResponseHeader, log) {
  * @param {string} userID - single or comma separated userIDs
  * @param {string | null} hostName
  * @returns {string}
- */
-function getVLESSConfig(userIDs, hostName) {
-	const commonUrlPart = `:443?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
-	const separator = "---------------------------------------------------------------";
-	const hashSeparator = "################################################################";
-
-	// Split the userIDs into an array
-	let userIDArray = userIDs.split(',');
-
-	// Prepare output array
-	let output = [];
-	let header = [];
-	const sublink = `https://${hostName}/sub/${userIDArray[0]}?format=clash`
-	const clash_link = `https://api.v1.mk/sub?target=clash&url=${encodeURIComponent(sublink)}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
-	header.push(`\n<p align="center"><img src="https://cloudflare-ipfs.com/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky" alt="图片描述" style="margin-bottom: -50px;">`);
-	header.push(`\n<b style=" font-size: 15px;" >Welcome! This function generates configuration for VLESS protocol. If you found this useful, please check our GitHub project for more:</b>\n`);
-	header.push(`<b style=" font-size: 15px;" >欢迎！这是生成 VLESS 协议的配置。如果您发现这个项目很好用，请查看我们的 GitHub 项目给我一个star：</b>\n`);
-	header.push(`\n<a href="https://github.com/3Kmfi6HP/EDtunnel" target="_blank">EDtunnel - https://github.com/3Kmfi6HP/EDtunnel</a>\n`);
-	header.push(`\n<iframe src="https://ghbtns.com/github-btn.html?user=USERNAME&repo=REPOSITORY&type=star&count=true&size=large" frameborder="0" scrolling="0" width="170" height="30" title="GitHub"></iframe>\n\n`.replace(/USERNAME/g, "3Kmfi6HP").replace(/REPOSITORY/g, "EDtunnel"));
-	header.push(`<a href="//${hostName}/sub/${userIDArray[0]}" target="_blank">VLESS 节点订阅连接</a>\n<a href="clash://install-config?url=${encodeURIComponent(clash_link)}" target="_blank">Clash for Windows 节点订阅连接</a>\n<a href="${clash_link}" target="_blank">Clash 节点订阅连接</a>\n<a href="https://sub.xf.free.hr/auto?host=${hostName}&uuid=${userIDArray[0]}" target="_blank">优选IP自动节点订阅</a></p>\n`);
-	header.push(``);
-
-	// Generate output string for each userID
-	userIDArray.forEach((userID) => {
-		const vlessMain = `vless://${userID}@${hostName}${commonUrlPart}`;
-		const vlessSec = `vless://${userID}@${proxyIP}${commonUrlPart}`;
-		output.push(`UUID: ${userID}`);
-		output.push(`${hashSeparator}\nv2ray default ip\n${separator}\n${vlessMain}\n${separator}`);
-		output.push(`${hashSeparator}\nv2ray with best ip\n${separator}\n${vlessSec}\n${separator}`);
-	});
-	output.push(`${hashSeparator}\n# Clash Proxy Provider 配置格式(configuration format)\nproxy-groups:\n  - name: UseProvider\n	type: select\n	use:\n	  - provider1\n	proxies:\n	  - Proxy\n	  - DIRECT\nproxy-providers:\n  provider1:\n	type: http\n	url: https://${hostName}/sub/${userIDArray[0]}?format=clash\n	interval: 3600\n	path: ./provider1.yaml\n	health-check:\n	  enable: true\n	  interval: 600\n	  # lazy: true\n	  url: http://www.gstatic.com/generate_204\n\n${hashSeparator}`);
-
-	// HTML Head with CSS
-	const htmlHead = `
-    <head>
-        <title>EDtunnel: VLESS configuration</title>
-        <meta name="description" content="This is a tool for generating VLESS protocol configurations. Give us a star on GitHub https://github.com/3Kmfi6HP/EDtunnel if you found it useful!">
-		<meta name="keywords" content="EDtunnel, cloudflare pages, cloudflare worker, severless">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-		<meta property="og:site_name" content="EDtunnel: VLESS configuration" />
-        <meta property="og:type" content="website" />
-        <meta property="og:title" content="EDtunnel - VLESS configuration and subscribe output" />
-        <meta property="og:description" content="Use cloudflare pages and worker severless to implement vless protocol" />
-        <meta property="og:url" content="https://${hostName}/" />
-        <meta property="og:image" content="https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(`vless://${userIDs.split(',')[0]}@${hostName}${commonUrlPart}`)}" />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="EDtunnel - VLESS configuration and subscribe output" />
-        <meta name="twitter:description" content="Use cloudflare pages and worker severless to implement vless protocol" />
-        <meta name="twitter:url" content="https://${hostName}/" />
-        <meta name="twitter:image" content="https://cloudflare-ipfs.com/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky" />
-        <meta property="og:image:width" content="1500" />
-        <meta property="og:image:height" content="1500" />
-
-        <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
-            color: #333;
-            padding: 10px;
-        }
-
-        a {
-            color: #1a0dab;
-            text-decoration: none;
-        }
-		img {
-			max-width: 100%;
-			height: auto;
-		}
-		
-        pre {
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            background-color: #fff;
-            border: 1px solid #ddd;
-            padding: 15px;
-            margin: 10px 0;
-        }
-		/* Dark mode */
-        @media (prefers-color-scheme: dark) {
-            body {
-                background-color: #333;
-                color: #f0f0f0;
-            }
-
-            a {
-                color: #9db4ff;
-            }
-
-            pre {
-                background-color: #282a36;
-                border-color: #6272a4;
-            }
-        }
-        </style>
-    </head>
-    `;
-
-	// Join output with newlines, wrap inside <html> and <body>
-	return `
-    <html>
-    ${htmlHead}
-    <body>
-    <pre style="
-    background-color: transparent;
-    border: none;
-">${header.join('')}</pre><pre>${output.join('\n')}</pre>
-    </body>
-</html>`;
-}
-
-
-function createVLESSSub(userID_Path, hostName) {
-	let portArray_http = [80, 8080, 8880, 2052, 2086, 2095, 2082];
-	let portArray_https = [443, 8443, 2053, 2096, 2087, 2083];
-
-	// Split the userIDs into an array
-	let userIDArray = userID_Path.includes(',') ? userID_Path.split(',') : [userID_Path];
-
-	// Prepare output array
-	let output = [];
-
-	// Generate output string for each userID
-	userIDArray.forEach((userID) => {
-		// Check if the hostName is a Cloudflare Pages domain, if not, generate HTTP configurations
-		// reasons: pages.dev not support http only https
-		if (!hostName.includes('pages.dev')) {
-			// Iterate over all ports for http
-			portArray_http.forEach((port) => {
-				const commonUrlPart_http = `:${port}?encryption=none&security=none&fp=random&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}-HTTP-${port}`;
-				const vlessMainHttp = `vless://${userID}@${hostName}${commonUrlPart_http}`;
-
-				// For each proxy IP, generate a VLESS configuration and add to output
-				proxyIPs.forEach((proxyIP) => {
-					const vlessSecHttp = `vless://${userID}@${proxyIP}${commonUrlPart_http}-${proxyIP}-EDtunnel`;
-					output.push(`${vlessMainHttp}`);
-					output.push(`${vlessSecHttp}`);
-				});
-			});
-		}
-		// Iterate over all ports for https
-		portArray_https.forEach((port) => {
-			const commonUrlPart_https = `:${port}?encryption=none&security=tls&sni=${hostName}&fp=random&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}-HTTPS-${port}`;
-			const vlessMainHttps = `vless://${userID}@${hostName}${commonUrlPart_https}`;
-
-			// For each proxy IP, generate a VLESS configuration and add to output
-			proxyIPs.forEach((proxyIP) => {
-				const vlessSecHttps = `vless://${userID}@${proxyIP}${commonUrlPart_https}-${proxyIP}-EDtunnel`;
-				output.push(`${vlessMainHttps}`);
-				output.push(`${vlessSecHttps}`);
-			});
-		});
-	});
-
-	// Join output with newlines
-	return output.join('\n');
-}
-
-const cn_hostnames = [
-	'weibo.com',                // Weibo - A popular social media platform
-	'www.baidu.com',            // Baidu - The largest search engine in China
-	'www.qq.com',               // QQ - A widely used instant messaging platform
-	'www.taobao.com',           // Taobao - An e-commerce website owned by Alibaba Group
-	'www.jd.com',               // JD.com - One of the largest online retailers in China
-	'www.sina.com.cn',          // Sina - A Chinese online media company
-	'www.sohu.com',             // Sohu - A Chinese internet service provider
-	'www.tmall.com',            // Tmall - An online retail platform owned by Alibaba Group
-	'www.163.com',              // NetEase Mail - One of the major email providers in China
-	'www.zhihu.com',            // Zhihu - A popular question-and-answer website
-	'www.youku.com',            // Youku - A Chinese video sharing platform
-	'www.xinhuanet.com',        // Xinhua News Agency - Official news agency of China
-	'www.douban.com',           // Douban - A Chinese social networking service
-	'www.meituan.com',          // Meituan - A Chinese group buying website for local services
-	'www.toutiao.com',          // Toutiao - A news and information content platform
-	'www.ifeng.com',            // iFeng - A popular news website in China
-	'www.autohome.com.cn',      // Autohome - A leading Chinese automobile online platform
-	'www.360.cn',               // 360 - A Chinese internet security company
-	'www.douyin.com',           // Douyin - A Chinese short video platform
-	'www.kuaidi100.com',        // Kuaidi100 - A Chinese express delivery tracking service
-	'www.wechat.com',           // WeChat - A popular messaging and social media app
-	'www.csdn.net',             // CSDN - A Chinese technology community website
-	'www.imgo.tv',              // ImgoTV - A Chinese live streaming platform
-	'www.aliyun.com',           // Alibaba Cloud - A Chinese cloud computing company
-	'www.eyny.com',             // Eyny - A Chinese multimedia resource-sharing website
-	'www.mgtv.com',             // MGTV - A Chinese online video platform
-	'www.xunlei.com',           // Xunlei - A Chinese download manager and torrent client
-	'www.hao123.com',           // Hao123 - A Chinese web directory service
-	'www.bilibili.com',         // Bilibili - A Chinese video sharing and streaming platform
-	'www.youth.cn',             // Youth.cn - A China Youth Daily news portal
-	'www.hupu.com',             // Hupu - A Chinese sports community and forum
-	'www.youzu.com',            // Youzu Interactive - A Chinese game developer and publisher
-	'www.panda.tv',             // Panda TV - A Chinese live streaming platform
-	'www.tudou.com',            // Tudou - A Chinese video-sharing website
-	'www.zol.com.cn',           // ZOL - A Chinese electronics and gadgets website
-	'www.toutiao.io',           // Toutiao - A news and information app
-	'www.tiktok.com',           // TikTok - A Chinese short-form video app
-	'www.netease.com',          // NetEase - A Chinese internet technology company
-	'www.cnki.net',             // CNKI - China National Knowledge Infrastructure, an information aggregator
-	'www.zhibo8.cc',            // Zhibo8 - A website providing live sports streams
-	'www.zhangzishi.cc',        // Zhangzishi - Personal website of Zhang Zishi, a public intellectual in China
-	'www.xueqiu.com',           // Xueqiu - A Chinese online social platform for investors and traders
-	'www.qqgongyi.com',         // QQ Gongyi - Tencent's charitable foundation platform
-	'www.ximalaya.com',         // Ximalaya - A Chinese online audio platform
-	'www.dianping.com',         // Dianping - A Chinese online platform for finding and reviewing local businesses
-	'www.suning.com',           // Suning - A leading Chinese online retailer
-	'www.zhaopin.com',          // Zhaopin - A Chinese job recruitment platform
-	'www.jianshu.com',          // Jianshu - A Chinese online writing platform
-	'www.mafengwo.cn',          // Mafengwo - A Chinese travel information sharing platform
-	'www.51cto.com',            // 51CTO - A Chinese IT technical community website
-	'www.qidian.com',           // Qidian - A Chinese web novel platform
-	'www.ctrip.com',            // Ctrip - A Chinese travel services provider
-	'www.pconline.com.cn',      // PConline - A Chinese technology news and review website
-	'www.cnzz.com',             // CNZZ - A Chinese web analytics service provider
-	'www.telegraph.co.uk',      // The Telegraph - A British newspaper website	
-	'www.ynet.com',             // Ynet - A Chinese news portal
-	'www.ted.com',              // TED - A platform for ideas worth spreading
-	'www.renren.com',           // Renren - A Chinese social networking service
-	'www.pptv.com',             // PPTV - A Chinese online video streaming platform
-	'www.liepin.com',           // Liepin - A Chinese online recruitment website
-	'www.881903.com',           // 881903 - A Hong Kong radio station website
-	'www.aipai.com',            // Aipai - A Chinese online video sharing platform
-	'www.ttpaihang.com',        // Ttpaihang - A Chinese celebrity popularity ranking website
-	'www.quyaoya.com',          // Quyaoya - A Chinese online ticketing platform
-	'www.91.com',               // 91.com - A Chinese software download website
-	'www.dianyou.cn',           // Dianyou - A Chinese game information website
-	'www.tmtpost.com',          // TMTPost - A Chinese technology media platform
-	'www.douban.com',           // Douban - A Chinese social networking service
-	'www.guancha.cn',           // Guancha - A Chinese news and commentary website
-	'www.so.com',               // So.com - A Chinese search engine
-	'www.58.com',               // 58.com - A Chinese classified advertising website
-	'www.google.com',           // Google - A multinational technology company
-	'www.cnblogs.com',          // Cnblogs - A Chinese technology blog community
-	'www.cntv.cn',              // CCTV - China Central Television official website
-	'www.secoo.com',            // Secoo - A Chinese luxury e-commerce platform
-];
+ */  
+function getVLESSConfig(userID, hostName) {
+	const wvlessws = `vless://${userID}@www.who.int:8880?encryption=none&security=none&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
+	const pvlesswstls = `vless://${userID}@www.who.int:8443?encryption=none&security=tls&type=ws&host=${hostName}&sni=${hostName}&fp=random&path=%2F%3Fed%3D2048#${hostName}`;
+	
+	if (hostName.includes('pages.dev')) {
+	  return `
+  <p>==========================配置详解==============================</p>
+  
+  <p>################################################################</p>
+  <p>CF-pages-vless+ws+tls节点，分享链接如下：</p>
+  
+  <p>${pvlesswstls}</p>
+  
+  <p>---------------------------------------------------------------</p>
+  <p>注意：如果 ${hostName} 在本地网络打不开（中国移动用户注意）</p>
+  <p>客户端选项的伪装域名(host)必须改为你在CF解析完成的自定义域名</p>
+  <p>---------------------------------------------------------------</p>
+  <p>客户端必要文明参数如下：</p>
+  <p>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP（反代IP必须与反代端口对应）</p>
+  <p>端口(port)：6个https端口可任意选择(443、8443、2053、2083、2087、2096)</p>
+  <p>用户ID(uuid)：${userID}</p>
+  <p>传输协议(network)：ws 或者 websocket</p>
+  <p>伪装域名(host)：${hostName}</p>
+  <p>路径(path)：/?ed=2048</p>
+  <p>传输安全(TLS)：开启</p>
+  <p>跳过证书验证(allowlnsecure)：false</p>
+  <p>################################################################</p>
+  `;
+  
+	} else if (hostName.includes('workers.dev'))  {
+	  return `
+  <p>==========================配置详解==============================</p>
+  
+  <p>################################################################</p>
+  <p>一、CF-workers-vless+ws节点，分享链接如下：</p>
+  
+  <p>${wvlessws}</p>
+  
+  <p>---------------------------------------------------------------</p>
+  <p>注意：当前节点无需使用CF解析完成的域名，客户端选项的TLS选项必须关闭</p>
+  <p>---------------------------------------------------------------</p>
+  <p>客户端必要文明参数如下：</p>
+  <p>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP（反代IP必须与反代端口对应）</p>
+  <p>端口(port)：7个http端口可任意选择(80、8080、8880、2052、2082、2086、2095)</p>
+  <p>用户ID(uuid)：${userID}</p>
+  <p>传输协议(network)：ws 或者 websocket</p>
+  <p>伪装域名(host)：${hostName}</p>
+  <p>路径(path)：/?ed=2048</p>
+  <p>################################################################</p>
+  
+  
+  <p>################################################################</p>
+  
+  <p>二、CF-workers-vless+ws+tls节点注意：请在浏览器地址栏输入：你设置的自定义域名/你设置的UUID</p>
+  <p>防止小白过多的操作失误，必须设置自定义域名后才能使用Workers方式的TLS模式，否则，建议只使用vless+ws节点即可</p>
+  <p>提示：使用pages方式部署，联通、电信用户大概率可以直接使用TLS模式，无需设置自定义域名</p>
+  <p>pages方式部署可参考此视频教程：https://youtu.be/McdRoLZeTqg</p>
+  
+  <p>################################################################
+  `;
+	} else {
+	  return `
+  <p>==========================配置详解==============================</p>
+  
+  <p>=====使用自定义域名查看配置，请确认使用的是workers还是pages=====</p>
+  
+  <p>################################################################</p>
+  <p>一、CF-workers-vless+ws节点，分享链接如下：</p>
+  
+  <p>${wvlessws}</p>
+  
+  <p>---------------------------------------------------------------</p>
+  <p>注意：当前节点无需使用CF解析完成的域名，客户端选项的TLS选项必须关闭</p>
+  <p>---------------------------------------------------------------</p>
+  <p>客户端必要文明参数如下：</p>
+  <p>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP（反代IP必须与反代端口对应）</p>
+  <p>端口(port)：7个http端口可任意选择(80、8080、8880、2052、2082、2086、2095)</p>
+  <p>用户ID(uuid)：${userID}</p>
+  <p>传输协议(network)：ws 或者 websocket</p>
+  <p>伪装域名(host)：${hostName}</p>
+  <p>路径(path)：/?ed=2048</p>
+  <p>################################################################</p>
+  
+  <p>################################################################</p>
+  <p>二、CF-workers-vless+ws+tls 或者 CF-pages-vless+ws+tls节点，分享链接如下：</p>
+  
+  <p>${pvlesswstls}</p>
+  
+  <p>---------------------------------------------------------------</p>
+  <p>注意：客户端选项的伪装域名(host)必须改为你在CF解析完成的自定义域名</p>
+  <p>---------------------------------------------------------------</p>
+  <p>客户端必要文明参数如下：</p>
+  <p>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP（反代IP必须与反代端口对应）</p>
+  <p>端口(port)：6个https端口可任意选择(443、8443、2053、2083、2087、2096)</p>
+  <p>用户ID(uuid)：${userID}</p>
+  <p>传输协议(network)：ws 或者 websocket</p>
+  <p>伪装域名(host)：${hostName}</p>
+  <p>路径(path)：/?ed=2048</p>
+  <p>传输安全(TLS)：开启</p>
+  <p>跳过证书验证(allowlnsecure)：false</p>
+  <p>################################################################</p>
+  `;
+	}
+  }
